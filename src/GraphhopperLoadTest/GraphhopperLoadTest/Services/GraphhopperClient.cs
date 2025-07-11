@@ -38,9 +38,10 @@ public class GraphhopperClient : IGraphhopperClient
             var url = $"{baseUrl}/route?" +
                      $"point={sourceCoordString}" +
                      $"&point={targetCoordString}" +
-                     "&vehicle=car" +
+                     "&profile=car" +
                      $"&instructions={configuration.IncludeInstructions.ToString().ToLower()}" +
-                     "&calc_points=false";
+                     "&calc_points=true" +
+                     "&points_encoded=false";
 
             _logger.LogDebug("Making request to: {Url}", url);
             _logger.LogDebug("Source coordinate: {Source}, Target coordinate: {Target}", sourceCoordString, targetCoordString);
