@@ -1,0 +1,185 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '9.0.x'
+  PROJECT_PATH: 'src/GraphhopperLoadTest/GraphhopperLoadTest/GraphhopperLoadTest.csproj'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        runtime: [win-x64, linux-x64, osx-x64, osx-arm64]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Required for MinVer
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Restore dependencies
+      run: dotnet restore ${{ env.PROJECT_PATH }}
+    
+    - name: Get version
+      id: version
+      run: |
+        VERSION=$(dotnet run --project ${{ env.PROJECT_PATH }} -- --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "1.0.0")
+        if [ -z "$VERSION" ]; then
+          VERSION=$(dotnet minver --project ${{ env.PROJECT_PATH }} 2>/dev/null || echo "1.0.0")
+        fi
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+    
+    - name: Build and publish
+      run: |
+        OUTPUT_NAME="graphhopper-load-test-${{ steps.version.outputs.VERSION }}-${{ matrix.runtime }}"
+        if [ "${{ matrix.runtime }}" = "win-x64" ]; then
+          OUTPUT_NAME="${OUTPUT_NAME}.exe"
+        fi
+        
+        dotnet publish ${{ env.PROJECT_PATH }} \
+          --configuration Release \
+          --runtime ${{ matrix.runtime }} \
+          --self-contained true \
+          --output ./publish/${{ matrix.runtime }} \
+          -p:PublishSingleFile=true \
+          -p:PublishTrimmed=true \
+          -p:TrimMode=partial \
+          -p:PublishReadyToRun=true \
+          -p:InvariantGlobalization=true \
+          -p:IncludeNativeLibrariesForSelfExtract=true \
+          -p:EnableCompressionInSingleFile=true \
+          -p:DebuggerSupport=false \
+          -p:EnableUnsafeBinaryFormatterSerialization=false \
+          -p:EnableUnsafeUTF7Encoding=false \
+          -p:HttpActivityPropagationSupport=false \
+          -p:InvariantGlobalization=true \
+          -p:MetadataUpdaterSupport=false \
+          -p:UseSystemResourceKeys=true
+        
+        # Rename the output file
+        cd ./publish/${{ matrix.runtime }}
+        if [ "${{ matrix.runtime }}" = "win-x64" ]; then
+          mv GraphhopperLoadTest.exe "$OUTPUT_NAME"
+        else
+          mv GraphhopperLoadTest "$OUTPUT_NAME"
+        fi
+        
+        # Create archive
+        if [ "${{ matrix.runtime }}" = "win-x64" ]; then
+          zip "../${OUTPUT_NAME}.zip" "$OUTPUT_NAME"
+        else
+          tar -czf "../${OUTPUT_NAME}.tar.gz" "$OUTPUT_NAME"
+        fi
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: graphhopper-load-test-${{ matrix.runtime }}
+        path: |
+          ./publish/*.zip
+          ./publish/*.tar.gz
+        retention-days: 30
+
+  create-release:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Get version and tag
+      id: version
+      run: |
+        TAG_NAME=${GITHUB_REF#refs/tags/}
+        VERSION=${TAG_NAME#v}
+        echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        echo "Tag: $TAG_NAME, Version: $VERSION"
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
+    
+    - name: Prepare release assets
+      run: |
+        mkdir -p ./release-assets
+        find ./artifacts -name "*.zip" -o -name "*.tar.gz" | xargs -I {} cp {} ./release-assets/
+        ls -la ./release-assets/
+    
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        cat > release_notes.md << 'EOF'
+        ## GraphHopper Load Test ${{ steps.version.outputs.VERSION }}
+        
+        ### Features
+        - Progressive load testing with configurable thread scaling
+        - Realistic route generation with configurable geographic parameters
+        - Comprehensive HTML reporting with graphs and statistics
+        - Command-line interface with extensive configuration options
+        - Support for route instructions (enabled by default)
+        
+        ### Download
+        Choose the appropriate binary for your platform:
+        - **Windows (x64)**: `graphhopper-load-test-${{ steps.version.outputs.VERSION }}-win-x64.exe.zip`
+        - **Linux (x64)**: `graphhopper-load-test-${{ steps.version.outputs.VERSION }}-linux-x64.tar.gz`
+        - **macOS (Intel)**: `graphhopper-load-test-${{ steps.version.outputs.VERSION }}-osx-x64.tar.gz`
+        - **macOS (Apple Silicon)**: `graphhopper-load-test-${{ steps.version.outputs.VERSION }}-osx-arm64.tar.gz`
+        
+        ### Usage
+        ```bash
+        # Extract the archive and run with default settings
+        ./graphhopper-load-test
+        
+        # Or with custom parameters
+        ./graphhopper-load-test --url "http://your-graphhopper-server" --duration 5 --verbose
+        
+        # See all options
+        ./graphhopper-load-test --help
+        ```
+        
+        ### Requirements
+        - No additional dependencies required (self-contained)
+        - A running GraphHopper server or use the included simulator
+        
+        **Full Changelog**: https://github.com/${{ github.repository }}/commits/${{ steps.version.outputs.TAG_NAME }}
+        EOF
+        
+        echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
+        cat release_notes.md >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.TAG_NAME }}
+        name: GraphHopper Load Test ${{ steps.version.outputs.VERSION }}
+        body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
+        files: ./release-assets/*
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
