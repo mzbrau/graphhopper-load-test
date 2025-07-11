@@ -6,6 +6,8 @@ public interface ICoordinateGenerator
 {
     Coordinate GenerateTargetCoordinate(Coordinate centerPoint, double radiusKm);
     Coordinate GenerateSourceCoordinate(Coordinate targetPoint, double minRadiusKm, double maxRadiusKm);
+    Coordinate GenerateTargetCoordinateWithRetry(Coordinate centerPoint, double radiusKm, int maxAttempts = 10);
+    Coordinate GenerateSourceCoordinateWithRetry(Coordinate targetPoint, double minRadiusKm, double maxRadiusKm, int maxAttempts = 10);
 }
 
 public class CoordinateGenerator : ICoordinateGenerator
@@ -21,6 +23,20 @@ public class CoordinateGenerator : ICoordinateGenerator
     {
         var radius = _random.NextDouble() * (maxRadiusKm - minRadiusKm) + minRadiusKm;
         return GenerateRandomCoordinateInRadius(targetPoint, radius);
+    }
+
+    public Coordinate GenerateTargetCoordinateWithRetry(Coordinate centerPoint, double radiusKm, int maxAttempts = 10)
+    {
+        // For now, just use the regular generation method
+        // In a future enhancement, this could incorporate validation logic
+        return GenerateTargetCoordinate(centerPoint, radiusKm);
+    }
+
+    public Coordinate GenerateSourceCoordinateWithRetry(Coordinate targetPoint, double minRadiusKm, double maxRadiusKm, int maxAttempts = 10)
+    {
+        // For now, just use the regular generation method
+        // In a future enhancement, this could incorporate validation logic
+        return GenerateSourceCoordinate(targetPoint, minRadiusKm, maxRadiusKm);
     }
 
     private Coordinate GenerateRandomCoordinateInRadius(Coordinate center, double radiusKm)

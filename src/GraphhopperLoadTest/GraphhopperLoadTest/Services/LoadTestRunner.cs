@@ -74,16 +74,34 @@ public class LoadTestRunner : ILoadTestRunner
     private async Task RunThreadAsync(int threadId, Coordinate targetCoordinate, DateTime endTime, LoadTestConfiguration configuration, CancellationToken cancellationToken)
     {
         var requestCount = 0;
+        var consecutiveFailures = 0;
+        const int maxConsecutiveFailures = 5;
         
         while (DateTime.UtcNow < endTime && !cancellationToken.IsCancellationRequested)
         {
             try
             {
                 requestCount++;
-                var sourceCoordinate = _coordinateGenerator.GenerateSourceCoordinate(
+                
+                // Generate source coordinate with retry logic for invalid coordinates
+                var sourceCoordinate = await GenerateValidSourceCoordinateAsync(
                     targetCoordinate, 
-                    configuration.SourceRadiusMinKm, 
-                    configuration.SourceRadiusMaxKm);
+                    configuration, 
+                    cancellationToken);
+
+                if (sourceCoordinate == null)
+                {
+                    _logger.LogWarning("Thread {ThreadId}: Unable to generate valid source coordinate after retries. Skipping request {RequestCount}", 
+                        threadId, requestCount);
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= maxConsecutiveFailures)
+                    {
+                        _logger.LogWarning("Thread {ThreadId}: Too many consecutive failures. Stopping thread.", threadId);
+                        break;
+                    }
+                    await Task.Delay(configuration.RequestDelayMilliseconds, cancellationToken);
+                    continue;
+                }
 
                 var request = new RouteRequest
                 {
@@ -96,10 +114,27 @@ public class LoadTestRunner : ILoadTestRunner
                 var response = await _graphhopperClient.GetRouteAsync(request, configuration, cancellationToken);
                 _responses.Add(response);
 
+                if (response.IsSuccess)
+                {
+                    consecutiveFailures = 0; // Reset on successful request
+                }
+                else
+                {
+                    consecutiveFailures++;
+                    _logger.LogDebug("Thread {ThreadId}: Request failed: {Error}", threadId, response.ErrorMessage);
+                }
+
                 if (requestCount % 10 == 0)
                 {
                     _logger.LogDebug("Thread {ThreadId}: Completed {RequestCount} requests. Last response time: {ResponseTime}ms", 
                         threadId, requestCount, response.ResponseTime.TotalMilliseconds);
+                }
+
+                // Stop thread if too many consecutive failures
+                if (consecutiveFailures >= maxConsecutiveFailures)
+                {
+                    _logger.LogWarning("Thread {ThreadId}: Too many consecutive failures. Stopping thread.", threadId);
+                    break;
                 }
 
                 // Wait before next request
@@ -111,10 +146,61 @@ public class LoadTestRunner : ILoadTestRunner
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in thread {ThreadId} during request {RequestCount}", threadId, requestCount);
+                consecutiveFailures++;
+                if (consecutiveFailures >= maxConsecutiveFailures)
+                {
+                    _logger.LogWarning("Thread {ThreadId}: Too many consecutive failures. Stopping thread.", threadId);
+                    break;
+                }
             }
         }
 
         _logger.LogInformation("Thread {ThreadId} completed with {RequestCount} requests", threadId, requestCount);
+    }
+
+    private async Task<Coordinate?> GenerateValidSourceCoordinateAsync(
+        Coordinate targetCoordinate, 
+        LoadTestConfiguration configuration, 
+        CancellationToken cancellationToken,
+        int maxAttempts = 3)
+    {
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var sourceCoordinate = _coordinateGenerator.GenerateSourceCoordinate(
+                targetCoordinate, 
+                configuration.SourceRadiusMinKm, 
+                configuration.SourceRadiusMaxKm);
+
+            // Quick validation: test if we can route from source to target
+            var testRequest = new RouteRequest
+            {
+                Source = sourceCoordinate,
+                Target = targetCoordinate,
+                RequestTime = DateTime.UtcNow,
+                ThreadId = -1 // Special ID for validation requests
+            };
+
+            try
+            {
+                var testResponse = await _graphhopperClient.GetRouteAsync(testRequest, configuration, cancellationToken);
+                if (testResponse.IsSuccess)
+                {
+                    return sourceCoordinate;
+                }
+                
+                // If this is not the last attempt, try again
+                if (attempt < maxAttempts)
+                {
+                    _logger.LogDebug("Coordinate validation failed on attempt {Attempt}, retrying...", attempt);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error during coordinate validation on attempt {Attempt}", attempt);
+            }
+        }
+
+        return null; // All attempts failed
     }
 
     private LoadTestStatistics CalculateStatistics(DateTime startTime, DateTime endTime)

@@ -33,7 +33,7 @@ public class LoadTestCommand
     [Command]
     public async Task<int> RunLoadTestAsync(
         [Option('u', Description = "GraphHopper server URL")] string url = "http://localhost:8989",
-        [Option('c', Description = "Center point latitude,longitude (e.g., 51.5074,-0.1278)")] string centerPoint = "51.5074,-0.1278",
+        [Option('c', Description = "Center point latitude,longitude. Examples: London(51.5074,-0.1278), Berlin(52.5200,13.4050), NYC(40.7128,-74.0060)")] string centerPoint = "51.5074,-0.1278",
         [Option('d', Description = "Test duration in minutes")] int duration = 10,
         [Option('i', Description = "Thread start interval in minutes")] int threadInterval = 1,
         [Option('r', Description = "Request delay in milliseconds")] int requestDelay = 1000,
@@ -43,7 +43,8 @@ public class LoadTestCommand
         [Option('o', Description = "Output HTML file path")] string output = "load-test-results.html",
         [Option("no-instructions", Description = "Disable route instructions in requests")] bool noInstructions = false,
         [Option('v', Description = "Enable verbose logging")] bool verbose = false,
-        [Option('n', Description = "Test name to display in the report")] string? testName = null)
+        [Option('n', Description = "Test name to display in the report")] string? testName = null,
+        [Option("validate-coordinates", Description = "Validate that center point has accessible routing data")] bool validateCoordinates = true)
     {
         try
         {
@@ -68,6 +69,17 @@ public class LoadTestCommand
             if (!await TestConnectivityAsync(configuration.GraphhopperUrl))
             {
                 _logger.LogWarning("GraphHopper connectivity test failed, but continuing anyway...");
+            }
+
+            // Validate center point coordinates if requested
+            if (validateCoordinates)
+            {
+                if (!await ValidateCenterPointAsync(configuration))
+                {
+                    _logger.LogError("Center point validation failed. The specified coordinates may not have accessible routing data.");
+                    _logger.LogInformation("Try using coordinates in a well-connected urban area, or disable validation with --validate-coordinates=false");
+                    return 1;
+                }
             }
 
             // Run the load test
@@ -175,6 +187,10 @@ public class LoadTestCommand
         Console.WriteLine($"Include Instructions: {configuration.IncludeInstructions}");
         Console.WriteLine($"Output File: {configuration.OutputFile}");
         Console.WriteLine();
+        Console.WriteLine("Note: For best results, use center coordinates in well-connected urban areas");
+        Console.WriteLine("with good road networks. Avoid remote areas, water bodies, or regions");
+        Console.WriteLine("without GraphHopper map data coverage.");
+        Console.WriteLine();
     }
 
     private async Task<bool> TestConnectivityAsync(string graphhopperUrl)
@@ -196,6 +212,61 @@ public class LoadTestCommand
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to test GraphHopper connectivity: {Message}", ex.Message);
+            return false;
+        }
+    }
+
+    private async Task<bool> ValidateCenterPointAsync(LoadTestConfiguration configuration)
+    {
+        try
+        {
+            _logger.LogInformation("Validating center point coordinates...");
+            
+            // Generate a small test route near the center point
+            var testTarget = new Coordinate(
+                configuration.CenterPoint.Latitude + 0.01, // ~1km offset
+                configuration.CenterPoint.Longitude + 0.01);
+
+            var testRequest = new RouteRequest
+            {
+                Source = configuration.CenterPoint,
+                Target = testTarget
+            };
+
+            var testResponse = await _graphhopperClient.GetRouteAsync(testRequest, configuration, CancellationToken.None);
+            
+            if (testResponse.IsSuccess)
+            {
+                _logger.LogInformation("Center point validation passed.");
+                return true;
+            }
+            
+            _logger.LogWarning("Center point validation failed: {Error}", testResponse.ErrorMessage);
+            
+            // Try a second test with a different offset to be sure
+            var testTarget2 = new Coordinate(
+                configuration.CenterPoint.Latitude - 0.01,
+                configuration.CenterPoint.Longitude - 0.01);
+
+            var testRequest2 = new RouteRequest
+            {
+                Source = configuration.CenterPoint,
+                Target = testTarget2
+            };
+
+            var testResponse2 = await _graphhopperClient.GetRouteAsync(testRequest2, configuration, CancellationToken.None);
+            
+            if (testResponse2.IsSuccess)
+            {
+                _logger.LogInformation("Center point validation passed on second attempt.");
+                return true;
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to validate center point: {Message}", ex.Message);
             return false;
         }
     }
