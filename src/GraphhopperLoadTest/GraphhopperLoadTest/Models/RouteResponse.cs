@@ -7,4 +7,5 @@ public class RouteResponse
     public bool IsSuccess { get; set; }
     public string? ErrorMessage { get; set; }
     public DateTime CompletedAt { get; set; }
+    public string? JsonResponse { get; set; }
 }

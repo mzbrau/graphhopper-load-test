@@ -60,12 +60,13 @@ public class GraphhopperClient : IGraphhopperClient
             }
             else
             {
-                // Validate that we got a valid JSON response
+                // Validate that we got a valid JSON response and store it
                 var content = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
                 try
                 {
                     using var jsonDoc = JsonDocument.Parse(content);
-                    // Just verify it's valid JSON, we don't need to process the route details
+                    // Store the raw JSON response for reporting
+                    response.JsonResponse = content;
                 }
                 catch (JsonException ex)
                 {

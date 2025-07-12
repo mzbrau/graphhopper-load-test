@@ -100,8 +100,21 @@ public class LoadTestCommand
             _logger.LogInformation("Generating HTML report...");
             await _reportGenerator.GenerateHtmlReportAsync(statistics, configuration);
 
+            var fullPath = Path.GetFullPath(configuration.OutputFile);
             _logger.LogInformation("Load test completed successfully!");
-            _logger.LogInformation("Results saved to: {OutputPath}", Path.GetFullPath(configuration.OutputFile));
+            _logger.LogInformation("Results saved to: {OutputPath}", fullPath);
+
+            // Open the report in the default browser
+            try
+            {
+                _logger.LogInformation("Opening report in default browser...");
+                OpenInDefaultBrowser(fullPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to open report in browser: {Message}", ex.Message);
+                _logger.LogInformation("You can manually open the report at: {OutputPath}", fullPath);
+            }
 
             return 0;
         }
@@ -268,6 +281,37 @@ public class LoadTestCommand
         {
             _logger.LogWarning(ex, "Failed to validate center point: {Message}", ex.Message);
             return false;
+        }
+    }
+
+    private static void OpenInDefaultBrowser(string filePath)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = filePath,
+                    UseShellExecute = true
+                });
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                System.Diagnostics.Process.Start("open", filePath);
+            }
+            else if (OperatingSystem.IsLinux())
+            {
+                System.Diagnostics.Process.Start("xdg-open", filePath);
+            }
+            else
+            {
+                throw new PlatformNotSupportedException("Opening files in browser is not supported on this platform");
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Failed to open file in default browser: {ex.Message}", ex);
         }
     }
 }

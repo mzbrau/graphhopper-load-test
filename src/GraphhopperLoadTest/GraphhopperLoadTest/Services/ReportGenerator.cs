@@ -76,6 +76,7 @@ public class ReportGenerator : IReportGenerator
         sb.AppendLine("        .stat-value { font-size: 2.2em; font-weight: bold; color: var(--accent-primary); margin-bottom: 8px; }");
         sb.AppendLine("        .stat-label { color: var(--text-secondary); font-size: 1.1em; }");
         sb.AppendLine("        .charts-container { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 40px; }");
+        sb.AppendLine("        .charts-container-three { display: grid; grid-template-columns: 1fr; gap: 30px; margin-bottom: 40px; }");
         sb.AppendLine("        .chart-section { background: var(--bg-card); padding: 25px; border-radius: 12px; border: 1px solid var(--border-color); }");
         sb.AppendLine("        .chart-section h2 { color: var(--accent-primary); margin-top: 0; margin-bottom: 20px; font-size: 1.4em; }");
         sb.AppendLine("        .chart-container { width: 100%; height: 400px; }");
@@ -154,6 +155,16 @@ public class ReportGenerator : IReportGenerator
         
         sb.AppendLine("        </div>");
 
+        // Normal distribution chart section
+        sb.AppendLine("        <div class=\"charts-container-three\">");
+        sb.AppendLine("            <div class=\"chart-section\">");
+        sb.AppendLine("                <h2>Response Time Distribution (Normal Distribution Bell Curve)</h2>");
+        sb.AppendLine("                <div class=\"chart-container\">");
+        sb.AppendLine("                    <canvas id=\"normalDistributionChart\"></canvas>");
+        sb.AppendLine("                </div>");
+        sb.AppendLine("            </div>");
+        sb.AppendLine("        </div>");
+
         // Statistics table
         sb.AppendLine("        <div class=\"details-section\">");
         sb.AppendLine("            <h2>Detailed Statistics</h2>");
@@ -195,6 +206,78 @@ public class ReportGenerator : IReportGenerator
         sb.AppendLine("                </table>");
         sb.AppendLine("            </div>");
         sb.AppendLine("        </div>");
+
+        // First successful responses per thread section
+        if (statistics.FirstSuccessfulResponsePerThread.Any())
+        {
+            sb.AppendLine("        <div class=\"details-section\">");
+            sb.AppendLine("            <h2>First Successful Response Per Thread</h2>");
+            sb.AppendLine("            <p>The first successful GraphHopper response for each thread (formatted JSON):</p>");
+            
+            foreach (var kvp in statistics.FirstSuccessfulResponsePerThread.OrderBy(x => x.Key))
+            {
+                var threadId = kvp.Key;
+                var response = kvp.Value;
+                
+                sb.AppendLine($"            <div class=\"details-section\" style=\"margin-bottom: 20px;\">");
+                sb.AppendLine($"                <h3 style=\"color: var(--accent-primary); margin-bottom: 10px;\">Thread {threadId}</h3>");
+                sb.AppendLine($"                <p style=\"color: var(--text-secondary); margin-bottom: 10px;\">");
+                sb.AppendLine($"                    Request Time: {response.Request.RequestTime:yyyy-MM-dd HH:mm:ss.fff} UTC<br>");
+                sb.AppendLine($"                    Response Time: {response.ResponseTime.TotalMilliseconds:F0}ms<br>");
+                sb.AppendLine($"                    Source: {response.Request.Source}<br>");
+                sb.AppendLine($"                    Target: {response.Request.Target}");
+                sb.AppendLine($"                </p>");
+                
+                if (!string.IsNullOrEmpty(response.JsonResponse))
+                {
+                    sb.AppendLine("                <pre style=\"");
+                    sb.AppendLine("                    background-color: var(--bg-secondary);");
+                    sb.AppendLine("                    border: 1px solid var(--border-color);");
+                    sb.AppendLine("                    border-radius: 6px;");
+                    sb.AppendLine("                    padding: 15px;");
+                    sb.AppendLine("                    overflow-x: auto;");
+                    sb.AppendLine("                    color: var(--text-primary);");
+                    sb.AppendLine("                    font-family: 'Courier New', Consolas, Monaco, monospace;");
+                    sb.AppendLine("                    font-size: 12px;");
+                    sb.AppendLine("                    line-height: 1.4;");
+                    sb.AppendLine("                    max-height: 400px;");
+                    sb.AppendLine("                    overflow-y: auto;");
+                    sb.AppendLine("                    white-space: pre-wrap;");
+                    sb.AppendLine("                    word-break: break-word;");
+                    sb.AppendLine("                \"><code>");
+                    
+                    // Format the JSON response
+                    try
+                    {
+                        using var jsonDoc = System.Text.Json.JsonDocument.Parse(response.JsonResponse);
+                        using var stream = new MemoryStream();
+                        using var writer = new System.Text.Json.Utf8JsonWriter(stream, new System.Text.Json.JsonWriterOptions 
+                        { 
+                            Indented = true 
+                        });
+                        jsonDoc.WriteTo(writer);
+                        writer.Flush();
+                        var formattedJson = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+                        sb.AppendLine(System.Web.HttpUtility.HtmlEncode(formattedJson));
+                    }
+                    catch
+                    {
+                        // Fallback to raw JSON if formatting fails
+                        sb.AppendLine(System.Web.HttpUtility.HtmlEncode(response.JsonResponse));
+                    }
+                    
+                    sb.AppendLine("</code></pre>");
+                }
+                else
+                {
+                    sb.AppendLine("                <p style=\"color: var(--text-secondary);\">No JSON response available</p>");
+                }
+                
+                sb.AppendLine("            </div>");
+            }
+            
+            sb.AppendLine("        </div>");
+        }
 
         // JavaScript for charts
         sb.AppendLine("        <script>");
@@ -319,6 +402,147 @@ public class ReportGenerator : IReportGenerator
         sb.AppendLine("                            title: {");
         sb.AppendLine("                                display: true,");
         sb.AppendLine("                                text: 'Time',");
+        sb.AppendLine("                                color: '#b0b0b0'");
+        sb.AppendLine("                            },");
+        sb.AppendLine("                            ticks: { color: '#b0b0b0' },");
+        sb.AppendLine("                            grid: { color: '#555555' }");
+        sb.AppendLine("                        }");
+        sb.AppendLine("                    }");
+        sb.AppendLine("                }");
+        sb.AppendLine("            });");
+        sb.AppendLine("");
+
+        // Normal distribution chart
+        sb.AppendLine("            // Generate normal distribution chart");
+        sb.AppendLine("            const normalCtx = document.getElementById('normalDistributionChart').getContext('2d');");
+        sb.AppendLine("            ");
+        sb.AppendLine("            // Calculate normal distribution data");
+        sb.AppendLine($"            const mean = {statistics.AverageResponseTime.TotalMilliseconds:F2};");
+        sb.AppendLine($"            const stdDev = {statistics.StandardDeviation:F2};");
+        sb.AppendLine($"            const minTime = {statistics.MinResponseTime.TotalMilliseconds:F2};");
+        sb.AppendLine($"            const maxTime = {statistics.MaxResponseTime.TotalMilliseconds:F2};");
+        sb.AppendLine("            ");
+        sb.AppendLine("            // Create range for bell curve (3 standard deviations on each side)");
+        sb.AppendLine("            const rangeStart = Math.max(0, mean - 3 * stdDev);");
+        sb.AppendLine("            const rangeEnd = mean + 3 * stdDev;");
+        sb.AppendLine("            const step = (rangeEnd - rangeStart) / 100;");
+        sb.AppendLine("            ");
+        sb.AppendLine("            const normalDistributionData = [];");
+        sb.AppendLine("            const normalDistributionLabels = [];");
+        sb.AppendLine("            ");
+        sb.AppendLine("            // Generate normal distribution curve");
+        sb.AppendLine("            for (let x = rangeStart; x <= rangeEnd; x += step) {");
+        sb.AppendLine("                const y = (1 / (stdDev * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * Math.pow((x - mean) / stdDev, 2));");
+        sb.AppendLine("                normalDistributionLabels.push(x.toFixed(0));");
+        sb.AppendLine("                normalDistributionData.push(y);");
+        sb.AppendLine("            }");
+        sb.AppendLine("            ");
+        sb.AppendLine("            // Create histogram of actual response times");
+        sb.AppendLine("            const responseTimes = [");
+        
+        var successfulResponsesForChart = statistics.AllResponses.Where(r => r.IsSuccess).ToList();
+        foreach (var response in successfulResponsesForChart)
+        {
+            sb.AppendLine($"                {response.ResponseTime.TotalMilliseconds:F0},");
+        }
+        
+        sb.AppendLine("            ];");
+        sb.AppendLine("            ");
+        sb.AppendLine("            // Create histogram bins");
+        sb.AppendLine("            const binCount = 20;");
+        sb.AppendLine("            const binWidth = (maxTime - minTime) / binCount;");
+        sb.AppendLine("            const histogramData = new Array(binCount).fill(0);");
+        sb.AppendLine("            const histogramLabels = [];");
+        sb.AppendLine("            ");
+        sb.AppendLine("            for (let i = 0; i < binCount; i++) {");
+        sb.AppendLine("                const binStart = minTime + i * binWidth;");
+        sb.AppendLine("                histogramLabels.push(binStart.toFixed(0));");
+        sb.AppendLine("            }");
+        sb.AppendLine("            ");
+        sb.AppendLine("            // Fill histogram bins");
+        sb.AppendLine("            responseTimes.forEach(time => {");
+        sb.AppendLine("                const binIndex = Math.min(Math.floor((time - minTime) / binWidth), binCount - 1);");
+        sb.AppendLine("                histogramData[binIndex]++;");
+        sb.AppendLine("            });");
+        sb.AppendLine("            ");
+        sb.AppendLine("            // Normalize histogram to match bell curve scale");
+        sb.AppendLine("            const maxHistogramValue = Math.max(...histogramData);");
+        sb.AppendLine("            const maxBellCurveValue = Math.max(...normalDistributionData);");
+        sb.AppendLine("            const scaleFactor = maxBellCurveValue / maxHistogramValue * 0.8; // Scale to 80% of bell curve height");
+        sb.AppendLine("            const normalizedHistogramData = histogramData.map(value => value * scaleFactor);");
+        sb.AppendLine("            ");
+        sb.AppendLine("            const normalChart = new Chart(normalCtx, {");
+        sb.AppendLine("                type: 'line',");
+        sb.AppendLine("                data: {");
+        sb.AppendLine("                    labels: normalDistributionLabels,");
+        sb.AppendLine("                    datasets: [{");
+        sb.AppendLine("                        label: 'Normal Distribution (Theoretical)',");
+        sb.AppendLine("                        data: normalDistributionData,");
+        sb.AppendLine("                        borderColor: '#4a9eff',");
+        sb.AppendLine("                        backgroundColor: 'rgba(74, 158, 255, 0.1)',");
+        sb.AppendLine("                        fill: true,");
+        sb.AppendLine("                        tension: 0.4,");
+        sb.AppendLine("                        pointRadius: 0,");
+        sb.AppendLine("                        borderWidth: 3");
+        sb.AppendLine("                    }, {");
+        sb.AppendLine("                        label: 'Mean (' + mean.toFixed(0) + 'ms)',");
+        sb.AppendLine("                        data: normalDistributionLabels.map(x => {");
+        sb.AppendLine("                            const xValue = parseFloat(x);");
+        sb.AppendLine("                            return Math.abs(xValue - mean) < step ? Math.max(...normalDistributionData) : null;");
+        sb.AppendLine("                        }),");
+        sb.AppendLine("                        borderColor: '#dc3545',");
+        sb.AppendLine("                        backgroundColor: 'transparent',");
+        sb.AppendLine("                        borderWidth: 3,");
+        sb.AppendLine("                        borderDash: [5, 5],");
+        sb.AppendLine("                        pointRadius: 0,");
+        sb.AppendLine("                        fill: false");
+        sb.AppendLine("                    }, {");
+        sb.AppendLine("                        label: '-1σ (' + (mean - stdDev).toFixed(0) + 'ms)',");
+        sb.AppendLine("                        data: normalDistributionLabels.map(x => {");
+        sb.AppendLine("                            const xValue = parseFloat(x);");
+        sb.AppendLine("                            return Math.abs(xValue - (mean - stdDev)) < step ? Math.max(...normalDistributionData) * 0.8 : null;");
+        sb.AppendLine("                        }),");
+        sb.AppendLine("                        borderColor: '#ffc107',");
+        sb.AppendLine("                        backgroundColor: 'transparent',");
+        sb.AppendLine("                        borderWidth: 2,");
+        sb.AppendLine("                        borderDash: [3, 3],");
+        sb.AppendLine("                        pointRadius: 0,");
+        sb.AppendLine("                        fill: false");
+        sb.AppendLine("                    }, {");
+        sb.AppendLine("                        label: '+1σ (' + (mean + stdDev).toFixed(0) + 'ms)',");
+        sb.AppendLine("                        data: normalDistributionLabels.map(x => {");
+        sb.AppendLine("                            const xValue = parseFloat(x);");
+        sb.AppendLine("                            return Math.abs(xValue - (mean + stdDev)) < step ? Math.max(...normalDistributionData) * 0.8 : null;");
+        sb.AppendLine("                        }),");
+        sb.AppendLine("                        borderColor: '#ffc107',");
+        sb.AppendLine("                        backgroundColor: 'transparent',");
+        sb.AppendLine("                        borderWidth: 2,");
+        sb.AppendLine("                        borderDash: [3, 3],");
+        sb.AppendLine("                        pointRadius: 0,");
+        sb.AppendLine("                        fill: false");
+        sb.AppendLine("                    }]");
+        sb.AppendLine("                },");
+        sb.AppendLine("                options: {");
+        sb.AppendLine("                    responsive: true,");
+        sb.AppendLine("                    maintainAspectRatio: false,");
+        sb.AppendLine("                    plugins: {");
+        sb.AppendLine("                        legend: { labels: { color: '#b0b0b0' } }");
+        sb.AppendLine("                    },");
+        sb.AppendLine("                    scales: {");
+        sb.AppendLine("                        y: {");
+        sb.AppendLine("                            beginAtZero: true,");
+        sb.AppendLine("                            title: {");
+        sb.AppendLine("                                display: true,");
+        sb.AppendLine("                                text: 'Probability Density',");
+        sb.AppendLine("                                color: '#b0b0b0'");
+        sb.AppendLine("                            },");
+        sb.AppendLine("                            ticks: { color: '#b0b0b0' },");
+        sb.AppendLine("                            grid: { color: '#555555' }");
+        sb.AppendLine("                        },");
+        sb.AppendLine("                        x: {");
+        sb.AppendLine("                            title: {");
+        sb.AppendLine("                                display: true,");
+        sb.AppendLine("                                text: 'Response Time (ms)',");
         sb.AppendLine("                                color: '#b0b0b0'");
         sb.AppendLine("                            },");
         sb.AppendLine("                            ticks: { color: '#b0b0b0' },");

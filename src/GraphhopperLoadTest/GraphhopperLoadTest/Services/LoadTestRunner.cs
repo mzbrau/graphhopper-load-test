@@ -15,6 +15,7 @@ public class LoadTestRunner : ILoadTestRunner
     private readonly ICoordinateGenerator _coordinateGenerator;
     private readonly ILogger<LoadTestRunner> _logger;
     private readonly ConcurrentBag<RouteResponse> _responses = [];
+    private readonly ConcurrentDictionary<int, RouteResponse> _firstSuccessfulResponses = new();
 
     public LoadTestRunner(
         IGraphhopperClient graphhopperClient,
@@ -112,10 +113,19 @@ public class LoadTestRunner : ILoadTestRunner
                 };
 
                 var response = await _graphhopperClient.GetRouteAsync(request, configuration, cancellationToken);
-                _responses.Add(response);
-
+                
+                // Store first successful response with JSON, clear JSON for subsequent responses
                 if (response.IsSuccess)
                 {
+                    // Try to store as first successful response for this thread
+                    var isFirstSuccess = _firstSuccessfulResponses.TryAdd(threadId, response);
+                    
+                    // If this is not the first successful response, clear the JSON to save memory
+                    if (!isFirstSuccess)
+                    {
+                        response.JsonResponse = null;
+                    }
+                    
                     consecutiveFailures = 0; // Reset on successful request
                 }
                 else
@@ -123,6 +133,8 @@ public class LoadTestRunner : ILoadTestRunner
                     consecutiveFailures++;
                     _logger.LogDebug("Thread {ThreadId}: Request failed: {Error}", threadId, response.ErrorMessage);
                 }
+                
+                _responses.Add(response);
 
                 if (requestCount % 10 == 0)
                 {
@@ -183,6 +195,10 @@ public class LoadTestRunner : ILoadTestRunner
             try
             {
                 var testResponse = await _graphhopperClient.GetRouteAsync(testRequest, configuration, cancellationToken);
+                
+                // Clear JSON response for validation requests to save memory
+                testResponse.JsonResponse = null;
+                
                 if (testResponse.IsSuccess)
                 {
                     return sourceCoordinate;
@@ -208,6 +224,9 @@ public class LoadTestRunner : ILoadTestRunner
         var allResponses = _responses.ToList();
         var successfulResponses = allResponses.Where(r => r.IsSuccess).ToList();
         
+        // Use the pre-stored first successful responses
+        var firstSuccessfulResponsePerThread = _firstSuccessfulResponses.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+        
         var statistics = new LoadTestStatistics
         {
             TestStartTime = startTime,
@@ -215,7 +234,8 @@ public class LoadTestRunner : ILoadTestRunner
             TotalRequests = allResponses.Count,
             SuccessfulRequests = successfulResponses.Count,
             FailedRequests = allResponses.Count - successfulResponses.Count,
-            AllResponses = allResponses
+            AllResponses = allResponses,
+            FirstSuccessfulResponsePerThread = firstSuccessfulResponsePerThread
         };
 
         if (successfulResponses.Any())

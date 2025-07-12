@@ -12,6 +12,7 @@ public class LoadTestStatistics
     public DateTime TestStartTime { get; set; }
     public DateTime TestEndTime { get; set; }
     public List<RouteResponse> AllResponses { get; set; } = [];
+    public Dictionary<int, RouteResponse> FirstSuccessfulResponsePerThread { get; set; } = [];
     
     public double SuccessRate => TotalRequests > 0 ? (double)SuccessfulRequests / TotalRequests * 100 : 0;
 }
